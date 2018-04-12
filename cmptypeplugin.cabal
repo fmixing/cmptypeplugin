@@ -1,0 +1,34 @@
+name:           cmptypeplugin
+version:        0.1.0.0
+homepage:       https://github.com/fmixing/cmptypeplugin
+author:         Alice Koroleva
+maintainer:     alicekoroleva239@gmail.com
+copyright:      2018 Alice Koroleva
+build-type:     Simple
+cabal-version:  >= 1.10
+
+source-repository head
+  type: git
+  location: https://github.com/fmixing/cmptypeplugin
+
+library
+  hs-source-dirs:
+      src
+  build-depends:
+      base >= 4.7 && <5, ghc-tcplugins-extra, ghc, type-level-sets
+  exposed-modules:
+      Plugin
+  ghc-options: -Wall
+  default-language: Haskell2010
+
+test-suite cmptypeplugin-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  hs-source-dirs:
+      test
+  build-depends:
+      base >=4.7 && <5
+    , cmptypeplugin
+    , type-level-sets
+    , ghc
+  default-language: Haskell2010
