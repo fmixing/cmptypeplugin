@@ -15,7 +15,7 @@ library
   hs-source-dirs:
       src
   build-depends:
-      base >= 4.7 && <5, ghc-tcplugins-extra, ghc, type-level-sets
+      base >= 4.7 && <5, ghc, ghc-tcplugins-extra
   exposed-modules:
       Plugin
   ghc-options: -Wall
@@ -29,6 +29,7 @@ test-suite cmptypeplugin-test
   build-depends:
       base >=4.7 && <5
     , cmptypeplugin
-    , type-level-sets
     , ghc
+    , ghc-prim
+  ghc-options: -fprint-explicit-kinds
   default-language: Haskell2010

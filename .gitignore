@@ -1,2 +1,5 @@
 .stack-work/
 *~
+test/Spec
+test/Spec.hi
+test/Spec.o

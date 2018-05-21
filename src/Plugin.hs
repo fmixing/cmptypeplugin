@@ -7,23 +7,24 @@
 {-# LANGUAGE ConstraintKinds      #-}
 {-# LANGUAGE ExplicitForAll       #-}
 
-module Plugin ( plugin, CmpType ) where
+module Plugin (plugin, CmpType) where
 
 import           Data.Either         (rights)
 import           Data.Maybe          (catMaybes)
 import           Data.Type.Equality  (type (==))
-import           Data.Typeable       (Proxy(..), Proxy, TypeRep, Typeable(..), typeRep, typeOf, typeRepFingerprint)
+import           Data.Typeable       (Proxy(..), Proxy, Typeable(..), typeRepFingerprint)
 import           Debug.Trace         (trace)
 import           GHC.TcPluginM.Extra (evByFiat, lookupModule, lookupName, tracePlugin)
 import           Outputable          (Outputable, ppr, showSDocUnsafe)
-import           Data.Type.Set       (Cmp)
+import qualified       Data.Kind           (Type)
+import Type.Reflection (TypeRep, typeRep, typeOf)
 
 
 -- GHC API
 import           FastString          (fsLit)
-import           Module              (mkModuleName)
-import           Name                (getName)
-import           OccName             (mkTcOcc)
+import           Module              (mkModuleName, Module(Module), moduleNameString, unitIdString, moduleName, moduleUnitId)
+import           Name                (getName, nameOccName, nameModule)
+import           OccName             (mkTcOcc, occNameString)
 import           Plugins             (Plugin (..), defaultPlugin)
 import           TcEvidence          (EvTerm (..))
 import           TcPluginM           (TcPluginM, tcLookupTyCon, zonkCt, tcPluginTrace)
@@ -40,120 +41,124 @@ import           Var                 (isId, isTcTyVar, isTyVar, tcTyVarDetails)
 import           Unique              (getKey, getUnique)
 import           TysWiredIn          (listTyCon, consDataCon)
 import           TcHsType            (tcInferArgs)
+import GHC.Fingerprint.Type (Fingerprint(..))
+import GHC.Fingerprint (fingerprintString, fingerprintFingerprints)
 
--- type family Cmp (a :: k) (b :: k) :: Ordering
-
--- type instance Cmp (a :: Type) (b :: Type) = 
-    
-type family CmpType (a :: Type) (b :: Type) :: Ordering
-
-type instance Cmp (a :: Type) (b :: Type) = CmpType a b
+type family CmpType (a :: k) (b :: k) :: Ordering
 
 plugin :: Plugin
 plugin = defaultPlugin { tcPlugin = const (Just cmpTypePlugin) }
 
 cmpTypePlugin :: TcPlugin
 cmpTypePlugin =
-  TcPlugin { tcPluginInit  = lookupCmpTyCon
+  TcPlugin { tcPluginInit  = trace "apply tcPluginInit" $ return Nothing
            , tcPluginSolve = solveCmp
            , tcPluginStop  = const (return ())
            }
 
-lookupCmpTyCon :: TcPluginM CmpDef
-lookupCmpTyCon = do
-    md <- lookupModule cmpModule cmpPackage
-    cmpTyCon <- look md "CmpType"
-    return $ CmpDef cmpTyCon
-  where
-    cmpModule = mkModuleName "Plugin"
-    cmpPackage = fsLit "cmptypeplugin"
-    look md s = tcLookupTyCon =<< lookupName md (mkTcOcc s)
-
-newtype CmpDef = CmpDef { cmp :: TyCon }
-
-solveCmp :: CmpDef
+solveCmp :: Maybe a
          -> [Ct]
          -> [Ct]
          -> [Ct]
          -> TcPluginM TcPluginResult
-solveCmp _ _ _ [] = return $ TcPluginOk [] []
-solveCmp defs _ _ wanteds = do
-    let setConstraints = catMaybes $ fmap (getSetConstraint defs) wanteds
-    case setConstraints of
+solveCmp _ _ _ wanteds = do
+    let setConstraints = printCt wanteds
+    case trace "apply tcPluginSolve" setConstraints of
         [] -> return $ TcPluginOk [] []
         _ -> return $ TcPluginContradiction []
 
--- здесь KindsOrTypes == [*, '[Int, Bool, Int]] -- ' здесь из вывода (те аутпута)
--- constraintToEvTerm :: SetConstraint -> Either Ct ([(EvTerm, Ct)], [Ct])
--- constraintToEvTerm setConstraint = do
---     let (ct, ty1, ty2, _, _) = setConstraint
---     case ty1 of
---         (TyConApp _ [_, y1]) ->  -- первый _ это TyCon для типа, второй _ это *
---             case ty2 of
---                 (TyConApp _ [_, y2]) -> do
---                     let types1 = trace ("extracted1 " ++ (showSDocUnsafe $ ppr $ extractTypes y1) ++ " sorted1 " ++ (showSDocUnsafe $ ppr $ sort $ extractTypes y1)) sort $ extractTypes y1
---                     let types2 = trace ("extracted2 " ++ (showSDocUnsafe $ ppr $ extractTypes y2) ++ " sorted2 " ++ (showSDocUnsafe $ ppr $ sort $ extractTypes y2)) sort $ extractTypes y2
---                     if checkEquality types1 types2
---                         then trace ("typechecked: " ++ (showSDocUnsafe $ ppr $ ty1) ++ " ~ " ++ (showSDocUnsafe $ ppr $ ty2)) Right ([(evByFiat "set-constraint" ty1 ty2, ct)], [])
---                         else trace ("not typechecked: " ++ (showSDocUnsafe $ ppr $ ty1) ++ " /~ " ++ (showSDocUnsafe $ ppr $ ty2)) Left ct
---                 _ -> Right ([], [ct]) -- означает, что плагин не может решить данный констрейнт (в смысле не предназначен для решения)
---         _-> Right ([], [ct])
+-- typeRepFingerprint (typeRep @Bool)
+-- ebf3a8541b05453b8bcac4a38e8b80a4
+-- ebf3a8541b05453b8bcac4a38e8b80a4
 
--- nonDetCmpType x y
+-- typeRepFingerprint (typeRep @[Int, Bool])
+-- fd08774aff73e44470311a620583e0ae
+-- 
 
-checkEquality :: [Type] -> [Type] -> Bool
-checkEquality [] [] = True
-checkEquality _ [] = False
-checkEquality [] _ = False
-checkEquality (x : xs) (y : ys) = nonDetCmpType x y == EQ && checkEquality xs ys
+-- typeRepFingerprint (typeRep @[Int])
+-- f7ea91875ddd888c2b4aa73e9744c883
+-- f7ea91875ddd888c2b4aa73e9744c883
+
+-- typeRepFingerprint (typeRep @(Either Int Bool))
+-- 8a39e35c00246e54d9a5de881c250ce8
+-- 8a39e35c00246e54d9a5de881c250ce8
+
+-- typeRepFingerprint (typeRep @('[Int]))
+-- 3514f55408d6e3846ca4277591763b7c
+-- 574bc2b6ebf6c8717d388cad922cfef9
+
+printCt :: [Ct] -> [Ct]
+printCt [] = trace "Empty list" []
+printCt (x : xs) = do
+    let [_, _, cmp, _] = getKOT $ getType x
+    let [_, t1, t2] = getKOT cmp
+
+    let kot1 = getKOT t1
+    let kot2 = getKOT t2
+
+    let fgp1 = trace "make t1 fingerprint" makeTyConFingerprint t1
+    let fgp2 = trace "make t2 fingerprint" makeTyConFingerprint t2
+
+    trace ("fpr t1: " ++ (show fgp1) ++ " kot1: " ++ (showSDocUnsafe $ ppr kot1) ++ " fpr t2: " ++ (show fgp2) ++ " kot2: " ++ (showSDocUnsafe $ ppr kot2)) (x : printCt xs)
+
+getKOT :: Type -> [Type]
+getKOT (TyConApp _ kot) = kot
+
+composeFgp :: Fingerprint -> [Fingerprint] -> Fingerprint
+composeFgp fgp [] = fgp
+composeFgp fgp (x : xs) = composeFgp (fingerprintFingerprints [fgp, x]) xs
+
+makeTyConFingerprint :: Type -> Fingerprint
+makeTyConFingerprint t = do
+    let ty_con_fgp = getTyConFingerprint $ getTyCon t
+    let kot = getKOT t
+    let fgpkot = map makeTyConFingerprint kot
+    trace (" kot: " ++ (showSDocUnsafe $ ppr kot)) $ composeFgp ty_con_fgp fgpkot
+
+getType :: Ct -> Type
+getType ct = ctEvPred $ ctEvidence ct 
+
+getTyCon :: Type -> TyCon
+getTyCon (TyConApp tyCon _) = tyCon
+
+getTyConFingerprint :: TyCon -> Fingerprint
+getTyConFingerprint tyCon = do
+    let mod_name = nameModule $ getName tyCon
+    let mod_fpr = moduleNameString $ moduleName mod_name
+    let pkg_fpr = unitIdString $ moduleUnitId mod_name
+    let n = occNameString $ nameOccName $ getName tyCon
+    trace (" name: "  ++ (pkg_fpr ++ " " ++ mod_fpr ++ " " ++ n)) $ fingerprintFingerprints $ [mkTyConFingerprint pkg_fpr mod_fpr n]
+
+mkTyConFingerprint :: String -- ^ package name
+                   -> String -- ^ module name
+                   -> String -- ^ tycon name
+                   -> Fingerprint
+mkTyConFingerprint pkg_name mod_name tycon_name =
+        fingerprintFingerprints
+        [ fingerprintString pkg_name
+        , fingerprintString mod_name
+        , fingerprintString tycon_name
+        ]
 
 
--- data PredTree = ClassPred Class [Type]
---               | EqPred EqRel Type Type
---               | IrredPred PredType
--- data EqRel = NomEq | ReprEq deriving (Eq, Ord)
--- | A choice of equality relation. This is separate from the type 'Role'
--- because 'Phantom' does not define a (non-trivial) equality relation.
+-- trTYPE :: TypeRep TYPE
+-- trTYPE = typeRep
 
--- EqPred NomEq (ty1 :: TyConApp) (ty2 :: TyConApp)
--- TyConApp TyCon [KindOrType]
--- ty1 == TyConApp (Set :: TyCon) ([*, '[Int, Bool, Int]] :: [KindOrType]) для нашего случая
--- getSetConstraint :: CmpDef -> Ct -> Maybe SetConstraint
--- getSetConstraint defs ct =
---     case classifyPredType $ ctEvPred $ ctEvidence ct of
---         (EqPred NomEq ty1 ty2) -- NomEq == nominal equality
---             -> case ty1 of
---                 (TyConApp tyCon1 kot1) -> case ty2 of
---                     (TyConApp tyCon2 kot2)
---                         | tyConName tyCon1 == getName (set defs) && tyConName tyCon2 == getName (set defs) -> Just (ct, ty1, ty2, kot1, kot2)
---                     _ -> Nothing
---                 _ -> Nothing
---         _ -> Nothing
+-- trLiftedRep :: TypeRep 'LiftedRep
+-- trLiftedRep = typeRep
 
-type SetConstraint = ( Ct    -- The Set constraint
-                     , Type  -- Fst argument to equality constraint
-                     , Type  -- Snd argument to equality constraint
-                     , [KindOrType] -- типы для первого Set
-                     , [KindOrType] -- типы для второго Set
-                     )
+-- mkTrType :: TypeRep Type
+-- mkTrType = TrType
 
--- DEBUG
-getSetConstraint :: CmpDef -> Ct -> Maybe SetConstraint
-getSetConstraint defs ct =
-    -- case trace ((showSDocUnsafe $ ppr $ ctEvPred $ ctEvidence ct) ++ " " ++ (showSDocUnsafe $ ppr ct)) (classifyPredType $ ctEvPred $ ctEvidence ct) of
-    case (classifyPredType $ ctEvPred $ ctEvidence ct) of
-        (EqPred NomEq ty1 ty2) -- NomEq == nominal equality
-            -- |  className cls == (getName $ knownRatTyCon defs)
-            --    -> Just (ct, cls, ty)
-            -- -> trace (showSDocUnsafe $ ppr a) Nothing
-            -> case ty1 of
-                (TyConApp tyCon1 kot1) -> case ty2 of
-                    (TyConApp tyCon2 kot2) -> trace ("TyConApp " ++ (showSDocUnsafe $ ppr tyCon1) ++ " " ++ (showSDocUnsafe $ ppr kot1) ++ " " ++ (show $ fmap (\x -> (showSDocUnsafe $ ppr x) ++ "         " ++ func' x) kot1)) Nothing
-                    _ -> Nothing
-                _ -> Nothing
-            -- -> trace (func' ty1 ++ " " ++ func' ty2) Nothing
-        (ClassPred clz ty) -> trace ("ClassPred " ++ (showSDocUnsafe $ ppr clz) ++ " " ++ (showSDocUnsafe $ ppr ty)) Nothing
-        IrredPred{} -> trace "IrredPred" Nothing
+-- typeRepFingerprint :: TypeRep a -> Fingerprint
+-- typeRepFingerprint TrType = fpTYPELiftedRep
+-- typeRepFingerprint (TrTyCon {trTyConFingerprint = fpr}) = fpr
+-- typeRepFingerprint (TrApp {trAppFingerprint = fpr}) = fpr
+-- typeRepFingerprint (TrFun {trFunFingerprint = fpr}) = fpr
+
+-- fpTYPELiftedRep :: Fingerprint
+-- fpTYPELiftedRep = fingerprintFingerprints
+--       [tyConFingerprint tyConTYPE, typeRepFingerprint trLiftedRep]
 
 func' :: Type -> String
 func' (TyVarTy var) = "TyVarTy " ++ (show $ isId var) ++ (show $ isTyVar var) ++ (show $ isTcTyVar var) ++ " "  ++ (showSDocUnsafe $ pprTcTyVarDetails $ tcTyVarDetails var) ++ " " ++ (showSDocUnsafe $ ppr var) ++ " "
